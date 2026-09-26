@@ -29,9 +29,6 @@ import logging
 logging.getLogger("pyrogram").setLevel(logging.ERROR)
 
 def js2py_monkey_patch():
-    """Patching js2py for a vulunability
-    Test it before using it! I don't guarentee that it won't break your program!
-    """
     from js2py.constructors.jsobject import Object
     fn = Object.own["getOwnPropertyNames"]["value"].code
     def wraps(*args, **kwargs):
@@ -42,7 +39,7 @@ def js2py_monkey_patch():
 js2py_monkey_patch()
 nest_asyncio.apply()
 
-version_content = "1.0.17"
+version_content = "1.0.18"
 version_id = 2026092601
 version_source = "Official"
 
@@ -1083,7 +1080,7 @@ async def memory_text(user_id, chatid, argument: str) -> str:
     return (
         f"🧠 你的长期记忆:\n{format_memories(mine)}\n\n"
         f"💬 本聊天的长期记忆:\n{format_memories(shared)}\n\n"
-        "使用方法:\n\n`/memory clear` 清除你的记忆\n`/memory clear chat` 清除本聊天的记忆[管理员]"
+        "使用方法:\n\n`/memory clear 清除你的记忆`\n`/memory clear chat 清除本聊天的记忆[管理员]`"
     )
 
 async def set_topic(chatid, topic: str, content: str):
@@ -1548,7 +1545,7 @@ async def reloadbot():
             BotCommand("model", "修改聊天模型"),
             BotCommand("prune", "测试模型可用性"),
             BotCommand("clear", "清除上下文记录"),
-            BotCommand("memory", "查看或清除长期记忆"),
+            BotCommand("memory", "查看或清除记忆"),
             BotCommand("effort", "设置思维链深度"),
             BotCommand("prompt", "设置系统提示词"),
             BotCommand("context", "开关上下文记录"),
@@ -1561,9 +1558,9 @@ async def help_bot(client: Client, message: Message):
     logger.info(f"{str(message.from_user.id)} Get Help")
     content = f"欢迎使用 `{bot_me.first_name}` 呢 你可以使用以下指令呢 ~\n\n/help `获取帮助菜单`\n/version `获取版本信息 - {version_content} ({version_id})`\n/stats `获取权限状态`"
     if message.from_user.id in admin_list:
-        content = content + "\n/chat `[管理]发送聊天内容`\n/model `[管理]修改聊天模型`\n/prune `[管理]测试模型可用性`\n/clear `[管理]清除上下文记录`\n/memory `[管理]查看或清除长期记忆`\n/effort `[管理]设置思维链深度`\n/prompt `[管理]设置系统提示词`\n/context `[管理]开关上下文记录`"
+        content = content + "\n/chat `[管理]发送聊天内容`\n/model `[管理]修改聊天模型`\n/prune `[管理]测试模型可用性`\n/clear `[管理]清除上下文记录`\n/memory `[管理]查看或清除记忆`\n/effort `[管理]设置思维链深度`\n/prompt `[管理]设置系统提示词`\n/context `[管理]开关上下文记录`"
     if message.from_user.id in su_admin_list:
-        content = content + "\n/trust `[超管]添加白名单群组`\n/distrust `[超管]删除白名单群群组`\n/grant `[超管]授权一个用户`\n/ungrant `[超管]取消用户授权`\n/grantscan `[超管]扫描清理授权`\n/stop `[超管]停止运行程序`\n/reload `[超管]重载配置文件`"
+        content = content + "\n/trust `[超管]添加白名单群组`\n/distrust `[超管]删除白名单群群组`\n/grant `[超管]授权一个用户`\n/ungrant `[超管]取消用户授权`\n/grantscan `[超管]扫描清理授权`\n/stop `[超管]停止运行程序`"
     msg = await client.send_message(chat_id = message.chat.id, text = content, reply_parameters = ReplyParameters(message_id = message.id))
     if not message.chat.type == pyrogram.enums.ChatType.PRIVATE:
         await deletecommand(msg, message, 10)
@@ -1596,6 +1593,11 @@ async def get_stats(client: Client, message: Message):
         content = content + f"\n\n当前对话数量: `{len(contexts)}`" #+ f"\n当前话题数量: `{len(topics)}`"
         content = content + "\n\n上下文记录: "
         if config.config['User'][message.from_user.id]['Context'] == True:
+            content = content + "✔"
+        else:
+            content = content + "❌"
+        content = content + "\n长期记忆: "
+        if config.config['AI']['Memory']['Enable'] == True:
             content = content + "✔"
         else:
             content = content + "❌"
@@ -1925,7 +1927,7 @@ async def ai_send_chat(client: Client, message: Message, send_text):
         used_tools.append(TOOLS_DEFINITION['web_fetch'])
     if config.config['AI']['Tool']['Enable'] == True and config.config['AI']['Tool']['JSExecution']['Enable'] == True:
         used_tools.append(TOOLS_DEFINITION['executejscode'])
-    if config.config['AI']['Tool']['Enable'] == True and config.config['AI']['Memory']['Enable'] == True:
+    if config.config['AI']['Memory']['Enable'] == True:
         used_tools.extend([TOOLS_DEFINITION['memory_save'], TOOLS_DEFINITION['memory_delete']])
     if ":" in use_model:
         use_model = use_model.split(':')[1]
@@ -2486,7 +2488,6 @@ async def show_memory(client: Client, message: Message):
         return
     argument = message.text.split(" ", 1)[1] if message.text and " " in message.text else ""
     msg = await client.send_message(chat_id = message.chat.id, text = await memory_text(message.from_user.id, message.chat.id, argument), reply_parameters = ReplyParameters(message_id = message.id))
-    await deletecommand(msg, message, 30)
 
 @app.on_message(filters.command(['page', 'p']))
 async def page_sub(client: Client, message: Message):
@@ -3098,6 +3099,11 @@ async def on_guest_message_handler(client: Client, message: Message):
             content = content + f"\n\n当前对话数量: `{len(contexts)}`" #+ f"\n当前话题数量: `{len(topics)}`"
             content = content + "\n\n上下文记录: "
             if config.config['User'][message.from_user.id]['Context'] == True:
+                content = content + "✔"
+            else:
+                content = content + "❌"
+            content = content + "\n长期记忆: "
+            if config.config['AI']['Memory']['Enable'] == True:
                 content = content + "✔"
             else:
                 content = content + "❌"
@@ -3889,7 +3895,7 @@ async def on_chosen_inline_result_handler(client: Client, chosen_inline_result: 
         used_tools.append(TOOLS_DEFINITION['web_fetch'])
     if config.config['AI']['Tool']['Enable'] == True and config.config['AI']['Tool']['JSExecution']['Enable'] == True:
         used_tools.append(TOOLS_DEFINITION['executejscode'])
-    if config.config['AI']['Tool']['Enable'] == True and config.config['AI']['Memory']['Enable'] == True:
+    if config.config['AI']['Memory']['Enable'] == True:
         used_tools.extend([TOOLS_DEFINITION['memory_save'], TOOLS_DEFINITION['memory_delete']])
     if ":" in use_model:
         use_model = use_model.split(':')[1]
@@ -4453,7 +4459,7 @@ def init():
             BotCommand("model", "修改聊天模型"),
             BotCommand("prune", "测试模型可用性"),
             BotCommand("clear", "清除上下文记录"),
-            BotCommand("memory", "查看或清除长期记忆"),
+            BotCommand("memory", "查看或清除记忆"),
             BotCommand("effort", "设置思维链深度"),
             BotCommand("prompt", "设置系统提示词"),
             BotCommand("context", "开关上下文记录"),
