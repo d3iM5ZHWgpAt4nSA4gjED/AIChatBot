@@ -1563,7 +1563,7 @@ async def help_bot(client: Client, message: Message):
     if message.from_user.id in admin_list:
         content = content + "\n/chat `[管理]发送聊天内容`\n/model `[管理]修改聊天模型`\n/prune `[管理]测试模型可用性`\n/clear `[管理]清除上下文记录`\n/memory `[管理]查看或清除长期记忆`\n/effort `[管理]设置思维链深度`\n/prompt `[管理]设置系统提示词`\n/context `[管理]开关上下文记录`"
     if message.from_user.id in su_admin_list:
-        content = content + "\n/trust `[超管]添加白名单群组`\n/distrust `[超管]删除白名单群群组`\n/grant `[超管]授权一个用户`\n/ungrant `[超管]取消用户授权`\n/grantscan `[超管]扫描清理授权`\n/stop `[超管]停止运行程序`\n/reload `[超管]重载配置文件`\n/set `[超管]写入配置文件`\n/get `[超管]读取配置文件`\n/config `[超管]唤起配置面板`"
+        content = content + "\n/trust `[超管]添加白名单群组`\n/distrust `[超管]删除白名单群群组`\n/grant `[超管]授权一个用户`\n/ungrant `[超管]取消用户授权`\n/grantscan `[超管]扫描清理授权`\n/stop `[超管]停止运行程序`\n/reload `[超管]重载配置文件`"
     msg = await client.send_message(chat_id = message.chat.id, text = content, reply_parameters = ReplyParameters(message_id = message.id))
     if not message.chat.type == pyrogram.enums.ChatType.PRIVATE:
         await deletecommand(msg, message, 10)
