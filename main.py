@@ -43,7 +43,7 @@ js2py_monkey_patch()
 nest_asyncio.apply()
 
 version_content = "1.0.17"
-version_id = 2026091901
+version_id = 2026092601
 version_source = "Official"
 
 command_description = {
@@ -228,7 +228,7 @@ command_description = {
     'AI': {
         'Description': 'AI相关',
         'type': 'dict',
-        'Branch': ['Vendor', 'ChunkStrategy', 'Tool', 'WhiteList', 'DefaultModel', 'FallbackModel', 'SystemPrompt', 'ExtraSystemPrompt', 'ReasoningEffort', 'MaxContext', 'MaxFileSize', 'AutoReply', 'WakeWord', 'FileSupport', 'IDRecognition'], # 'Summary', 'AutoAnswer', 
+        'Branch': ['Vendor', 'ChunkStrategy', 'Tool', 'Memory', 'WhiteList', 'DefaultModel', 'FallbackModel', 'SystemPrompt', 'ExtraSystemPrompt', 'ReasoningEffort', 'MaxContext', 'MaxFileSize', 'AutoReply', 'WakeWord', 'FileSupport', 'IDRecognition'], # 'Summary', 'AutoAnswer',
         'Default': {},
     },
     'AI.Vendor': {
@@ -490,6 +490,18 @@ command_description = {
         'Branch': None,
         'Default': True,
     },
+    'AI.Memory': {
+        'Description': '长期记忆',
+        'type': 'dict',
+        'Branch': ['Enable'],
+        'Default': {},
+    },
+    'AI.Memory.Enable': {
+        'Description': '是否启用长期记忆',
+        'type': 'bool',
+        'Branch': None,
+        'Default': True,
+    },
     'AI.WhiteList': {
         'Description': '白名单群组',
         'type': 'list',
@@ -580,6 +592,37 @@ TOOLS_DEFINITION = {
                 },
                 "required": ["content", "data"],
                 "additionalProperties": False
+            }
+        }
+    },
+    "memory_save": {
+        "type": "function",
+        "function": {
+            "name": "memory_save",
+            "description": "Save a long-term memory that will be shown to you in future conversations. Use it for stable facts and preferences worth remembering, not for transient details. Saving an existing topic overwrites it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Short unique key, e.g. 'preferred_language'."},
+                    "content": {"type": "string", "description": "What to remember."},
+                    "scope": {"type": "string", "enum": ["user", "chat"], "description": "'user' = about the current user (default); 'chat' = shared by this chat."}
+                },
+                "required": ["topic", "content"]
+            }
+        }
+    },
+    "memory_delete": {
+        "type": "function",
+        "function": {
+            "name": "memory_delete",
+            "description": "Delete a long-term memory by topic.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "The topic to delete."},
+                    "scope": {"type": "string", "enum": ["user", "chat"]}
+                },
+                "required": ["topic"]
             }
         }
     }
@@ -881,6 +924,16 @@ async def init_db():
     #topic_db = await aiosqlite.connect("Topic.db")
     chat_db.row_factory = aiosqlite.Row
     #topic_db.row_factory = aiosqlite.Row
+    await chat_db.execute("""
+        CREATE TABLE IF NOT EXISTS memories (
+            scope TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            content TEXT NOT NULL,
+            updated INTEGER NOT NULL,
+            PRIMARY KEY (scope, topic)
+        )
+    """)
+    await chat_db.commit()
 async def close_db():
     if chat_db:
         await chat_db.close()
@@ -973,6 +1026,65 @@ async def keep_last_chat(chatid, count: int):
     # VACUUM 不能在未提交事务中执行，所以要先 commit
     await chat_db.execute("VACUUM")
     await chat_db.commit()
+
+async def save_memory(scope: str, topic: str, content: str):
+    await chat_db.execute(
+        "INSERT INTO memories (scope, topic, content, updated) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(scope, topic) DO UPDATE SET content = excluded.content, updated = excluded.updated",
+        (scope, topic, content, int(time.time()))
+    )
+    await chat_db.commit()
+
+async def delete_memory(scope: str, topic: str) -> bool:
+    cursor = await chat_db.execute(
+        "DELETE FROM memories WHERE scope = ? AND topic = ?",
+        (scope, topic)
+    )
+    await chat_db.commit()
+    return cursor.rowcount > 0
+
+async def list_memories(scope: str) -> list[dict]:
+    async with chat_db.execute(
+        "SELECT topic, content FROM memories WHERE scope = ? ORDER BY updated",
+        (scope,)
+    ) as cursor:
+        return [dict(row) for row in await cursor.fetchall()]
+
+async def clear_memories(scope: str):
+    await chat_db.execute("DELETE FROM memories WHERE scope = ?", (scope,))
+    await chat_db.commit()
+
+def memory_scope(user_id, chatid, scope: str = "user") -> str:
+    return f"chat:{chatid}" if scope == "chat" else f"user:{user_id}"
+
+async def get_memory_prompt(user_id, chatid) -> str:
+    memories = [("user", item) for item in await list_memories(memory_scope(user_id, chatid))]
+    memories += [("chat", item) for item in await list_memories(memory_scope(user_id, chatid, "chat"))]
+    if not memories:
+        return ""
+    return "Long-term memories (manage with memory_save / memory_delete):\n" + "\n".join(
+        f"- [{scope}] {item['topic']}: {item['content']}" for scope, item in memories
+    )
+
+async def memory_text(user_id, chatid, argument: str) -> str:
+    argument = argument.strip()
+    if argument == "clear":
+        await clear_memories(memory_scope(user_id, chatid))
+        return "✔ 已清除你的长期记忆 ~"
+    if argument == "clear chat":
+        if int(user_id) not in admin_list:
+            return "❌ 您没有权限呢 请联系超管授权 ~"
+        await clear_memories(memory_scope(user_id, chatid, "chat"))
+        return "✔ 已清除本聊天的长期记忆 ~"
+    mine = await list_memories(memory_scope(user_id, chatid))
+    shared = await list_memories(memory_scope(user_id, chatid, "chat"))
+    def format_memories(rows):
+        return "\n".join(f"- `{item['topic']}`: {item['content']}" for item in rows) or "(无)"
+    return (
+        f"🧠 你的长期记忆:\n{format_memories(mine)}\n\n"
+        f"💬 本聊天的长期记忆:\n{format_memories(shared)}\n\n"
+        "使用方法:\n\n`/memory clear` 清除你的记忆\n`/memory clear chat` 清除本聊天的记忆[管理员]"
+    )
 
 async def set_topic(chatid, topic: str, content: str):
     """
@@ -1341,7 +1453,7 @@ async def tool_web_search(query: str):
     result = f"No results found for '{query}'"
     return result
 
-async def execute_tool_call(tool_name: str, tool_args: dict) -> str:
+async def execute_tool_call(tool_name: str, tool_args: dict, user_id=None, chatid=None) -> str:
     try:
         if tool_name == "web_fetch":
             return await tool_web_fetch(tool_args.get("url", ""))
@@ -1349,6 +1461,19 @@ async def execute_tool_call(tool_name: str, tool_args: dict) -> str:
             return await tool_web_search(tool_args.get("query", ""))
         elif tool_name == "executejscode":
             return executejscode(tool_args.get("content", ""), tool_args.get("data", ""))
+        elif tool_name == "memory_save":
+            topic = str(tool_args.get("topic", "")).strip()[:100]
+            content = str(tool_args.get("content", "")).strip()[:2000]
+            if not topic or not content:
+                return "Error: topic and content are required."
+            await save_memory(memory_scope(user_id, chatid, tool_args.get("scope", "user")), topic, content)
+            return f"Saved memory '{topic}'."
+        elif tool_name == "memory_delete":
+            topic = str(tool_args.get("topic", "")).strip()[:100]
+            if not topic:
+                return "Error: topic is required."
+            deleted = await delete_memory(memory_scope(user_id, chatid, tool_args.get("scope", "user")), topic)
+            return "Deleted." if deleted else "No such memory."
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
@@ -1423,6 +1548,7 @@ async def reloadbot():
             BotCommand("model", "修改聊天模型"),
             BotCommand("prune", "测试模型可用性"),
             BotCommand("clear", "清除上下文记录"),
+            BotCommand("memory", "查看或清除长期记忆"),
             BotCommand("effort", "设置思维链深度"),
             BotCommand("prompt", "设置系统提示词"),
             BotCommand("context", "开关上下文记录"),
@@ -1435,9 +1561,9 @@ async def help_bot(client: Client, message: Message):
     logger.info(f"{str(message.from_user.id)} Get Help")
     content = f"欢迎使用 `{bot_me.first_name}` 呢 你可以使用以下指令呢 ~\n\n/help `获取帮助菜单`\n/version `获取版本信息 - {version_content} ({version_id})`\n/stats `获取权限状态`"
     if message.from_user.id in admin_list:
-        content = content + "\n/chat `[管理]发送聊天内容`\n/model `[管理]修改聊天模型`\n/prune `[管理]测试模型可用性`\n/clear `[管理]清除上下文记录`\n/effort `[管理]设置思维链深度`\n/prompt `[管理]设置系统提示词`\n/context `[管理]开关上下文记录`"
+        content = content + "\n/chat `[管理]发送聊天内容`\n/model `[管理]修改聊天模型`\n/prune `[管理]测试模型可用性`\n/clear `[管理]清除上下文记录`\n/memory `[管理]查看或清除长期记忆`\n/effort `[管理]设置思维链深度`\n/prompt `[管理]设置系统提示词`\n/context `[管理]开关上下文记录`"
     if message.from_user.id in su_admin_list:
-        content = content + "\n/trust `[超管]添加白名单群组`\n/distrust `[超管]删除白名单群群组`\n/grant `[超管]授权一个用户`\n/ungrant `[超管]取消用户授权`\n/grantscan `[超管]扫描清理授权`\n/stop `[超管]停止运行程序`\n/reload `[超管]重载配置文件`"
+        content = content + "\n/trust `[超管]添加白名单群组`\n/distrust `[超管]删除白名单群群组`\n/grant `[超管]授权一个用户`\n/ungrant `[超管]取消用户授权`\n/grantscan `[超管]扫描清理授权`\n/stop `[超管]停止运行程序`\n/reload `[超管]重载配置文件`\n/set `[超管]写入配置文件`\n/get `[超管]读取配置文件`\n/config `[超管]唤起配置面板`"
     msg = await client.send_message(chat_id = message.chat.id, text = content, reply_parameters = ReplyParameters(message_id = message.id))
     if not message.chat.type == pyrogram.enums.ChatType.PRIVATE:
         await deletecommand(msg, message, 10)
@@ -1751,8 +1877,12 @@ async def ai_send_chat(client: Client, message: Message, send_text):
         ai_messages.append({"role": "system", "content": config.config['AI']['ExtraSystemPrompt'].format_map(SafeFormatDict(cur_date=datetime.datetime.now().strftime("%Y-%m-%d"), cur_time=datetime.datetime.now().strftime("%H:%M:%S"), cur_datetime=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), model_name=use_model.split(':', 1)[1] if ':' in use_model else use_model, assistant_name=bot_me.first_name))})
     if config.config['AI']['IDRecognition']['Enable'] == True and len(config.config['AI']['IDRecognition']['Prompt']) != 0:
         ai_messages.append({"role": "system", "content": config.config['AI']['IDRecognition']['Prompt']})
-    if len(systemprompt) != 0:   
+    if len(systemprompt) != 0:
         ai_messages.append({"role": "system", "content": systemprompt})
+    if config.config['AI']['Memory']['Enable'] == True:
+        memory_prompt = await get_memory_prompt(message.from_user.id, message.chat.id)
+        if memory_prompt:
+            ai_messages.append({"role": "system", "content": memory_prompt})
     if config.config['User'].get(message.from_user.id, {}).get('Context', True) == True or message.chat.type != pyrogram.enums.ChatType.PRIVATE:
         await keep_last_chat(message.chat.id, config.config['AI']['MaxContext'])
         contexts = await get_chat(message.chat.id)
@@ -1795,6 +1925,8 @@ async def ai_send_chat(client: Client, message: Message, send_text):
         used_tools.append(TOOLS_DEFINITION['web_fetch'])
     if config.config['AI']['Tool']['Enable'] == True and config.config['AI']['Tool']['JSExecution']['Enable'] == True:
         used_tools.append(TOOLS_DEFINITION['executejscode'])
+    if config.config['AI']['Tool']['Enable'] == True and config.config['AI']['Memory']['Enable'] == True:
+        used_tools.extend([TOOLS_DEFINITION['memory_save'], TOOLS_DEFINITION['memory_delete']])
     if ":" in use_model:
         use_model = use_model.split(':')[1]
     if len(used_tools) == 0:
@@ -2257,7 +2389,7 @@ async def ai_send_chat(client: Client, message: Message, send_text):
                                 msg = await client.send_message(chat_id = message.chat.id, text = f"⏳ 执行脚本中 ...", reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton('停止', callback_data='stop ' + identifier)]]), reply_parameters = ReplyParameters(message_id = message.id))
                     except:
                         pass
-                    tool_result = await execute_tool_call(func_name, func_args)
+                    tool_result = await execute_tool_call(func_name, func_args, message.from_user.id, message.chat.id)
                     payload["messages"].append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
@@ -2345,6 +2477,16 @@ async def clear_current_chat(client: Client, message: Message):
     await clear_chat(message.chat.id)
     msg = await client.send_message(chat_id = message.chat.id, text = f"✔ 已清除当前聊天的记录呢 ~", reply_parameters = ReplyParameters(message_id = message.id))
     await deletecommand(msg, message, 10)
+
+@app.on_message(filters.command(['memory']))
+async def show_memory(client: Client, message: Message):
+    if not int(message.from_user.id) in admin_list and not int(message.chat.id) in config.config['AI']['WhiteList']:
+        msg = await client.send_message(chat_id = message.chat.id, text = f"❌ 您没有权限或本群并未加入白名单呢 请联系超管授权 ~", reply_parameters = ReplyParameters(message_id = message.id))
+        await deletecommand(msg, message, 10)
+        return
+    argument = message.text.split(" ", 1)[1] if message.text and " " in message.text else ""
+    msg = await client.send_message(chat_id = message.chat.id, text = await memory_text(message.from_user.id, message.chat.id, argument), reply_parameters = ReplyParameters(message_id = message.id))
+    await deletecommand(msg, message, 30)
 
 @app.on_message(filters.command(['page', 'p']))
 async def page_sub(client: Client, message: Message):
@@ -2932,6 +3074,11 @@ async def on_guest_message_handler(client: Client, message: Message):
         await clear_chat(current_chat_id)
         await client.answer_guest_query(message.guest_query_id, result = InlineQueryResultArticle("✔ 已清除当前聊天的记录呢 ~", input_message_content = InputTextMessageContent(f"✔ 已清除当前聊天的记录呢 ~")))
         return
+    elif send_text.split(' ')[0] == "/memory":
+        argument = send_text.split(" ", 1)[1] if " " in send_text else ""
+        content = await memory_text(message.from_user.id, current_chat_id, argument)
+        await client.answer_guest_query(message.guest_query_id, result = InlineQueryResultArticle(content, input_message_content = InputTextMessageContent(content)))
+        return
     elif send_text.split(' ')[0] == "/stats":
         content = "你当前的权限状态是:\n\n管理权限: "
         if int(message.from_user.id) in admin_list:
@@ -3238,8 +3385,12 @@ async def on_guest_message_handler(client: Client, message: Message):
         ai_messages.append({"role": "system", "content": config.config['AI']['ExtraSystemPrompt'].format_map(SafeFormatDict(cur_date=datetime.datetime.now().strftime("%Y-%m-%d"), cur_time=datetime.datetime.now().strftime("%H:%M:%S"), cur_datetime=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), model_name=use_model.split(':', 1)[1] if ':' in use_model else use_model, assistant_name=bot_me.first_name))})
     if config.config['AI']['IDRecognition']['Enable'] == True and len(config.config['AI']['IDRecognition']['Prompt']) != 0:
         ai_messages.append({"role": "system", "content": config.config['AI']['IDRecognition']['Prompt']})
-    if len(systemprompt) != 0:   
+    if len(systemprompt) != 0:
         ai_messages.append({"role": "system", "content": systemprompt})
+    if config.config['AI']['Memory']['Enable'] == True:
+        memory_prompt = await get_memory_prompt(message.from_user.id, current_chat_id)
+        if memory_prompt:
+            ai_messages.append({"role": "system", "content": memory_prompt})
     if config.config['User'].get(message.from_user.id, {}).get('Context', True) == True:
         await keep_last_chat(current_chat_id, config.config['AI']['MaxContext'])
         contexts = await get_chat(current_chat_id)
@@ -3282,6 +3433,8 @@ async def on_guest_message_handler(client: Client, message: Message):
         used_tools.append(TOOLS_DEFINITION['web_fetch'])
     if config.config['AI']['Tool']['Enable'] == True and config.config['AI']['Tool']['JSExecution']['Enable'] == True:
         used_tools.append(TOOLS_DEFINITION['executejscode'])
+    if config.config['AI']['Tool']['Enable'] == True and config.config['AI']['Memory']['Enable'] == True:
+        used_tools.extend([TOOLS_DEFINITION['memory_save'], TOOLS_DEFINITION['memory_delete']])
     if ":" in use_model:
         use_model = use_model.split(':')[1]
     if len(used_tools) == 0:
@@ -3640,7 +3793,7 @@ async def on_guest_message_handler(client: Client, message: Message):
                             edit_count += 1
                     except:
                         pass
-                    tool_result = await execute_tool_call(func_name, func_args)
+                    tool_result = await execute_tool_call(func_name, func_args, message.from_user.id, current_chat_id)
                     payload["messages"].append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
@@ -3712,8 +3865,12 @@ async def on_chosen_inline_result_handler(client: Client, chosen_inline_result: 
         systemprompt = config.config['AI']['SystemPrompt']
     if len(config.config['AI']['ExtraSystemPrompt']) != 0:
         ai_messages.append({"role": "system", "content": config.config['AI']['ExtraSystemPrompt'].format_map(SafeFormatDict(cur_date=datetime.datetime.now().strftime("%Y-%m-%d"), cur_time=datetime.datetime.now().strftime("%H:%M:%S"), cur_datetime=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), model_name=use_model.split(':', 1)[1] if ':' in use_model else use_model, assistant_name=bot_me.first_name))})
-    if len(systemprompt) != 0:   
+    if len(systemprompt) != 0:
         ai_messages.append({"role": "system", "content": systemprompt})
+    if config.config['AI']['Memory']['Enable'] == True:
+        memory_prompt = await get_memory_prompt(chosen_inline_result.from_user.id, chosen_inline_result.from_user.id)
+        if memory_prompt:
+            ai_messages.append({"role": "system", "content": memory_prompt})
     if config.config['User'].get(chosen_inline_result.from_user.id, {}).get('Context', True) == True:
         await keep_last_chat(chosen_inline_result.from_user.id, config.config['AI']['MaxContext'])
         contexts = await get_chat(chosen_inline_result.from_user.id)
@@ -3732,6 +3889,8 @@ async def on_chosen_inline_result_handler(client: Client, chosen_inline_result: 
         used_tools.append(TOOLS_DEFINITION['web_fetch'])
     if config.config['AI']['Tool']['Enable'] == True and config.config['AI']['Tool']['JSExecution']['Enable'] == True:
         used_tools.append(TOOLS_DEFINITION['executejscode'])
+    if config.config['AI']['Tool']['Enable'] == True and config.config['AI']['Memory']['Enable'] == True:
+        used_tools.extend([TOOLS_DEFINITION['memory_save'], TOOLS_DEFINITION['memory_delete']])
     if ":" in use_model:
         use_model = use_model.split(':')[1]
     if len(used_tools) == 0:
@@ -4082,7 +4241,7 @@ async def on_chosen_inline_result_handler(client: Client, chosen_inline_result: 
                     except:
                         pass
                     
-                    tool_result = await execute_tool_call(func_name, func_args)
+                    tool_result = await execute_tool_call(func_name, func_args, chosen_inline_result.from_user.id, chosen_inline_result.from_user.id)
                     payload["messages"].append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
@@ -4132,7 +4291,6 @@ async def on_chosen_inline_result_handler(client: Client, chosen_inline_result: 
 
 @app.on_callback_query()
 async def callback_query_handler(client: Client, callback_query: CallbackQuery):
-    global wait_send
     if callback_query.data.split()[0] == 'info':
         if callback_query.data.split()[1] == 'page_info':
             await client.answer_callback_query(callback_query.id, f"第 {callback_query.data.split()[2]} 页  共 {callback_query.data.split()[3]} 页", show_alert=True)
@@ -4295,6 +4453,7 @@ def init():
             BotCommand("model", "修改聊天模型"),
             BotCommand("prune", "测试模型可用性"),
             BotCommand("clear", "清除上下文记录"),
+            BotCommand("memory", "查看或清除长期记忆"),
             BotCommand("effort", "设置思维链深度"),
             BotCommand("prompt", "设置系统提示词"),
             BotCommand("context", "开关上下文记录"),
