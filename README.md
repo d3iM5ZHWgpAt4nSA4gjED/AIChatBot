@@ -312,6 +312,16 @@ SuAdmin:
 /prompt 请使用简洁的中文回答
 ```
 
+##### /memory <可选:清除长期记忆>
+
+查看或清除长期记忆。
+
+当仅使用 `/memory` 时查看个人及本群的长期记忆。
+
+使用 `/memory clear` 清除个人长期记忆。
+
+管理员可使用 `/memory clear chat` 清除本聊天的记忆。
+
 ##### /effort
 
 打开推理预算选择面板。`/reason` 与 `/reasoneffort` 也可以使用。
