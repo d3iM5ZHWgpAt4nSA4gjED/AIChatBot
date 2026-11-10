@@ -39,8 +39,8 @@ def js2py_monkey_patch():
 js2py_monkey_patch()
 nest_asyncio.apply()
 
-version_content = "1.0.18"
-version_id = 2026092601
+version_content = "1.0.19"
+version_id = 2026111001
 version_source = "Official"
 
 command_description = {
@@ -2726,7 +2726,7 @@ async def test_model_ava(ai_url, ai_key, ai_model, total, msg):
                     temp_text += "❌"
             equal_signs = int(cal / 5)
             space_count = 20 - equal_signs
-            temp_text = temp_text + "⏳ 测试模型可用性中 ...\n\n[`" + "=" * equal_signs + " " * space_count + "`]\n\n目前剩余任务数量为: `" + str(total - already_check + 1) + "`"
+            temp_text = temp_text + "\n\n[`" + "=" * equal_signs + " " * space_count + "`]\n\n目前剩余任务数量为: `" + str(total - already_check + 1) + "`"
             await app.edit_message_text(chat_id = msg.chat.id, message_id = msg.id, text = temp_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('停止', callback_data='prune')]]))
         return {"model": temp_model, "delay": -1, "status": False}
 
