@@ -815,6 +815,7 @@ test_prune_flag = False
 stop_prune_flag = False
 
 prune_history = None
+prune_data = {}
 
 already_check = 0
 
@@ -2652,7 +2653,7 @@ async def change_model(client: Client, message: Message):
         await deletecommand(msg, message, 10)
 
 async def test_model_ava(ai_url, ai_key, ai_model, total, msg):
-    global semaphore, already_check, stop_prune_flag
+    global semaphore, already_check, stop_prune_flag, prune_data
     if stop_prune_flag == True:
         return
     temp_model = ai_model
@@ -2676,38 +2677,62 @@ async def test_model_ava(ai_url, ai_key, ai_model, total, msg):
                 elapsed_ms = int((datetime.datetime.now() - start_time).total_seconds() * 1000)
                 req = json.loads(cont.text)
                 if len(req.get("choices", [])) > 0 and len(req.get("choices", [])[0].get("message", {}).get("content", {})) > 0:
+                    prune_data["data"][temp_model] = {"delay": elapsed_ms, "status": True}
                     already_check = already_check + 1
                     cal = already_check * 100 / total
                     cal_old = (already_check - 1) * 100 / total
                     if int(cal / config.config['Other']['RefreshFrequency']) > int(cal_old / config.config['Other']['RefreshFrequency']) or already_check == total:
+                        temp_text = "⏳ 测试模型可用性中 ...\n"
+                        for modelname in prune_data["modellist"]:
+                            temp_text += f"\n**{modelname}**: "
+                            if prune_data['data'].get(modelname, {}).get('status', None) == True:
+                                temp_text += f"✔ - `{prune_data['data'][modelname]['delay']}ms`"
+                            elif prune_data['data'].get(modelname, {}).get('status', None) == False:
+                                temp_text += "❌"
                         equal_signs = int(cal / 5)
                         space_count = 20 - equal_signs
-                        temp_text = "⏳ 测试模型可用性中 ...\n\n[`" + "=" * equal_signs + " " * space_count + "`]\n\n目前剩余任务数量为: `" + str(total - already_check + 1) + "`"
+                        temp_text = temp_text + "\n\n[`" + "=" * equal_signs + " " * space_count + "`]\n\n目前剩余任务数量为: `" + str(total - already_check + 1) + "`"
                         await app.edit_message_text(chat_id = msg.chat.id, message_id = msg.id, text = temp_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('停止', callback_data='prune')]]))
                     return {"model": temp_model, "delay": elapsed_ms, "status": True}
+        prune_data["data"][temp_model] = {"delay": -1, "status": False}
         already_check = already_check + 1
         cal = already_check * 100 / total
         cal_old = (already_check - 1) * 100 / total
         if int(cal / config.config['Other']['RefreshFrequency']) > int(cal_old / config.config['Other']['RefreshFrequency']) or already_check == total:
+            temp_text = "⏳ 测试模型可用性中 ...\n"
+            for modelname in prune_data["modellist"]:
+                temp_text += f"\n**{modelname}**: "
+                if prune_data['data'].get(modelname, {}).get('status', None) == True:
+                    temp_text += f"✔ - `{prune_data['data'][modelname]['delay']}ms`"
+                elif prune_data['data'].get(modelname, {}).get('status', None) == False:
+                    temp_text += "❌"
             equal_signs = int(cal / 5)
             space_count = 20 - equal_signs
-            temp_text = "⏳ 测试模型可用性中 ...\n\n[`" + "=" * equal_signs + " " * space_count + "`]\n\n目前剩余任务数量为: `" + str(total - already_check + 1) + "`"
+            temp_text = temp_text + "\n\n[`" + "=" * equal_signs + " " * space_count + "`]\n\n目前剩余任务数量为: `" + str(total - already_check + 1) + "`"
             await app.edit_message_text(chat_id = msg.chat.id, message_id = msg.id, text = temp_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('停止', callback_data='prune')]]))
         return {"model": temp_model, "delay": -1, "status": False}
     except:
+        prune_data["data"][temp_model] = {"delay": -1, "status": False}
         already_check = already_check + 1
         cal = already_check * 100 / total
         cal_old = (already_check - 1) * 100 / total
         if int(cal / config.config['Other']['RefreshFrequency']) > int(cal_old / config.config['Other']['RefreshFrequency']) or already_check == total:
+            temp_text = "⏳ 测试模型可用性中 ...\n"
+            for modelname in prune_data["modellist"]:
+                temp_text += f"\n**{modelname}**: "
+                if prune_data['data'].get(modelname, {}).get('status', None) == True:
+                    temp_text += f"✔ - `{prune_data['data'][modelname]['delay']}ms`"
+                elif prune_data['data'].get(modelname, {}).get('status', None) == False:
+                    temp_text += "❌"
             equal_signs = int(cal / 5)
             space_count = 20 - equal_signs
-            temp_text = "⏳ 测试模型可用性中 ...\n\n[`" + "=" * equal_signs + " " * space_count + "`]\n\n目前剩余任务数量为: `" + str(total - already_check + 1) + "`"
+            temp_text = temp_text + "⏳ 测试模型可用性中 ...\n\n[`" + "=" * equal_signs + " " * space_count + "`]\n\n目前剩余任务数量为: `" + str(total - already_check + 1) + "`"
             await app.edit_message_text(chat_id = msg.chat.id, message_id = msg.id, text = temp_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('停止', callback_data='prune')]]))
         return {"model": temp_model, "delay": -1, "status": False}
 
 @app.on_message(filters.command(['prune']))
 async def prune_model(client: Client, message: Message):
-    global semaphore, already_check, test_prune_flag, stop_prune_flag, prune_history
+    global semaphore, already_check, test_prune_flag, stop_prune_flag, prune_history, prune_data
     if not int(message.from_user.id) in admin_list:
         msg = await client.send_message(chat_id = message.chat.id, text = f"❌ 您没有权限呢 请联系超管授权 ~", reply_parameters = ReplyParameters(message_id = message.id))
         await deletecommand(msg, message, 10)
@@ -2740,6 +2765,7 @@ async def prune_model(client: Client, message: Message):
             if prune_keyword is not None and not re.search(prune_keyword, modelname, re.IGNORECASE):
                 continue
             model_name.append(modelname)
+    prune_data = {"modellist": model_name, "data": {}}
     for aivendor in config.config['AI']['Vendor']:
         for modelname in config.config['AI']['Vendor'][aivendor].get('Model', []):
             if prune_keyword is not None and not re.search(prune_keyword, modelname, re.IGNORECASE):
